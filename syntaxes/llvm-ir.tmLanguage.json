@@ -1,0 +1,297 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LLVM IR",
+  "scopeName": "source.llvm-ir",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#metadata" },
+    { "include": "#attributes" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#keywords" },
+    { "include": "#instructions" },
+    { "include": "#identifiers" },
+    { "include": "#labels" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.llvm-ir",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.llvm-ir",
+          "begin": "c\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.llvm-ir",
+              "match": "\\\\[0-9A-Fa-f]{2}"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.llvm-ir",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.llvm-ir",
+              "match": "\\\\[0-9A-Fa-f]{2}"
+            }
+          ]
+        }
+      ]
+    },
+    "metadata": {
+      "patterns": [
+        {
+          "name": "storage.type.metadata.llvm-ir",
+          "match": "![a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "storage.type.metadata.llvm-ir",
+          "match": "!\\d+"
+        },
+        {
+          "name": "keyword.other.metadata.llvm-ir",
+          "match": "\\b(distinct|DICompileUnit|DIFile|DIBasicType|DIDerivedType|DICompositeType|DISubroutineType|DILocalVariable|DIGlobalVariable|DIExpression|DILocation|DISubprogram|DILexicalBlock|DILexicalBlockFile|DINamespace|DIModule|DITemplateTypeParameter|DITemplateValueParameter|DIGlobalVariableExpression|DILabel|DIObjCProperty|DIImportedEntity|DIMacro|DIMacroFile|DIEnumerator|DISubrange|DIGenericSubrange)\\b"
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.llvm-ir",
+          "match": "\\b(alwaysinline|argmemonly|builtin|cold|convergent|dereferenceable|dereferenceable_or_null|hot|inaccessiblemem_or_argmemonly|inaccessiblememonly|inlinehint|jumptable|minsize|mustprogress|naked|nobuiltin|nocallback|nocapture|nocf_check|noduplicate|nofree|noimplicitfloat|noinline|nomerge|nonlazybind|nonnull|norecurse|noredzone|noreturn|nosync|noundef|nounwind|null_pointer_is_valid|optforfuzzing|optnone|optsize|preallocated|readnone|readonly|returned|returns_twice|safestack|sanitize_address|sanitize_hwaddress|sanitize_memory|sanitize_memtag|sanitize_thread|shadowcallstack|signext|speculatable|speculative_load_hardening|ssp|sspreq|sspstrong|strictfp|swifterror|swiftself|uwtable|willreturn|writeonly|zeroext|immarg|byval|byref|inalloca|inreg|nest|noalias|nocapture|noundef|nonnull|preallocated|sret|align|alignstack)\\b"
+        },
+        {
+          "name": "entity.other.attribute-name.llvm-ir",
+          "match": "#\\d+"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.llvm-ir",
+          "match": "\\b(void|half|bfloat|float|double|fp128|x86_fp80|ppc_fp128|x86_amx|x86_mmx|ptr|label|token|metadata|opaque)\\b"
+        },
+        {
+          "name": "storage.type.integer.llvm-ir",
+          "match": "\\bi[1-9][0-9]*\\b"
+        },
+        {
+          "name": "storage.type.llvm-ir",
+          "match": "\\btype\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.llvm-ir",
+          "match": "\\b(true|false|null|none|undef|poison|zeroinitializer)\\b"
+        },
+        {
+          "name": "constant.numeric.float.llvm-ir",
+          "match": "\\b0x[KLMHRh]?[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.llvm-ir",
+          "match": "[-+]?[0-9]+\\.[0-9]*([eE][-+]?[0-9]+)?"
+        },
+        {
+          "name": "constant.numeric.float.llvm-ir",
+          "match": "[-+]?[0-9]+[eE][-+]?[0-9]+"
+        },
+        {
+          "name": "constant.numeric.integer.llvm-ir",
+          "match": "\\b[-+]?[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.llvm-ir",
+          "match": "\\b(define|declare|global|constant|private|internal|available_externally|linkonce|weak|common|appending|extern_weak|linkonce_odr|weak_odr|external|dllimport|dllexport|thread_local|localdynamic|initialexec|localexec|addrspace|section|comdat|alias|ifunc|module|source_filename|target|datalayout|triple|attributes|uselistorder|uselistorder_bb)\\b"
+        },
+        {
+          "name": "keyword.control.calling-convention.llvm-ir",
+          "match": "\\b(ccc|fastcc|coldcc|webkit_jscc|anyregcc|preserve_mostcc|preserve_allcc|preserve_nonecc|cxx_fast_tlscc|tailcc|swiftcc|swifttailcc|cfguard_checkcc|x86_stdcallcc|x86_fastcallcc|x86_thiscallcc|x86_vectorcallcc|x86_regcallcc|x86_intrcc|x86_64_sysvcc|win64cc|arm_apcscc|arm_aapcscc|arm_aapcs_vfpcc|msp430_intrcc|ptx_kernel|ptx_device|spir_func|spir_kernel|intel_ocl_bicc|amdgpu_vs|amdgpu_gs|amdgpu_ps|amdgpu_cs|amdgpu_kernel|amdgpu_gfx|aarch64_vector_pcs|aarch64_sve_vector_pcs)\\b"
+        },
+        {
+          "name": "keyword.control.visibility.llvm-ir",
+          "match": "\\b(default|hidden|protected)\\b"
+        },
+        {
+          "name": "keyword.control.dll-storage.llvm-ir",
+          "match": "\\b(dllimport|dllexport)\\b"
+        },
+        {
+          "name": "keyword.control.tls.llvm-ir",
+          "match": "\\b(thread_local|localdynamic|initialexec|localexec)\\b"
+        },
+        {
+          "name": "keyword.other.unnamed-addr.llvm-ir",
+          "match": "\\b(unnamed_addr|local_unnamed_addr)\\b"
+        },
+        {
+          "name": "keyword.control.runtime-preemption.llvm-ir",
+          "match": "\\b(dso_preemptable|dso_local|dso_local_equivalent)\\b"
+        }
+      ]
+    },
+    "instructions": {
+      "patterns": [
+        {
+          "name": "keyword.operator.terminator.llvm-ir",
+          "match": "\\b(ret|br|switch|indirectbr|invoke|callbr|resume|catchswitch|catchret|cleanupret|unreachable)\\b"
+        },
+        {
+          "name": "keyword.operator.unary.llvm-ir",
+          "match": "\\b(fneg)\\b"
+        },
+        {
+          "name": "keyword.operator.binary.llvm-ir",
+          "match": "\\b(add|fadd|sub|fsub|mul|fmul|udiv|sdiv|fdiv|urem|srem|frem)\\b"
+        },
+        {
+          "name": "keyword.operator.bitwise.llvm-ir",
+          "match": "\\b(shl|lshr|ashr|and|or|xor)\\b"
+        },
+        {
+          "name": "keyword.operator.vector.llvm-ir",
+          "match": "\\b(extractelement|insertelement|shufflevector)\\b"
+        },
+        {
+          "name": "keyword.operator.aggregate.llvm-ir",
+          "match": "\\b(extractvalue|insertvalue)\\b"
+        },
+        {
+          "name": "keyword.operator.memory.llvm-ir",
+          "match": "\\b(alloca|load|store|fence|cmpxchg|atomicrmw|getelementptr)\\b"
+        },
+        {
+          "name": "keyword.operator.conversion.llvm-ir",
+          "match": "\\b(trunc|zext|sext|fptrunc|fpext|fptoui|fptosi|uitofp|sitofp|ptrtoint|inttoptr|bitcast|addrspacecast)\\b"
+        },
+        {
+          "name": "keyword.operator.other.llvm-ir",
+          "match": "\\b(icmp|fcmp|phi|select|freeze|call|tail|musttail|notail|va_arg|landingpad|catchpad|cleanuppad)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.llvm-ir",
+          "match": "\\b(eq|ne|ugt|uge|ult|ule|sgt|sge|slt|sle|oeq|ogt|oge|olt|ole|one|ord|ueq|une|uno)\\b"
+        },
+        {
+          "name": "keyword.operator.memory-ordering.llvm-ir",
+          "match": "\\b(unordered|monotonic|acquire|release|acq_rel|seq_cst|syncscope)\\b"
+        },
+        {
+          "name": "keyword.operator.atomicrmw.llvm-ir",
+          "match": "\\b(xchg|nand|max|min|umax|umin|fadd|fsub|fmax|fmin)\\b"
+        },
+        {
+          "name": "keyword.operator.fast-math.llvm-ir",
+          "match": "\\b(nnan|ninf|nsz|arcp|contract|afn|reassoc|fast)\\b"
+        },
+        {
+          "name": "keyword.operator.exact.llvm-ir",
+          "match": "\\b(exact|nuw|nsw|inbounds|inrange)\\b"
+        },
+        {
+          "name": "keyword.operator.volatile.llvm-ir",
+          "match": "\\b(volatile)\\b"
+        },
+        {
+          "name": "keyword.other.llvm-ir",
+          "match": "\\b(to|personality|cleanup|catch|filter|from|within|unwind)\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.global.llvm-ir",
+          "match": "@[-a-zA-Z$._][-a-zA-Z$._0-9]*"
+        },
+        {
+          "name": "variable.other.global.unnamed.llvm-ir",
+          "match": "@[0-9]+"
+        },
+        {
+          "name": "variable.other.global.quoted.llvm-ir",
+          "begin": "@\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.llvm-ir",
+              "match": "\\\\[0-9A-Fa-f]{2}"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.local.llvm-ir",
+          "match": "%[-a-zA-Z$._][-a-zA-Z$._0-9]*"
+        },
+        {
+          "name": "variable.other.local.unnamed.llvm-ir",
+          "match": "%[0-9]+"
+        },
+        {
+          "name": "variable.other.local.quoted.llvm-ir",
+          "begin": "%\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.llvm-ir",
+              "match": "\\\\[0-9A-Fa-f]{2}"
+            }
+          ]
+        }
+      ]
+    },
+    "labels": {
+      "patterns": [
+        {
+          "name": "entity.name.label.llvm-ir",
+          "match": "^\\s*[-a-zA-Z$._][-a-zA-Z$._0-9]*:"
+        },
+        {
+          "name": "entity.name.label.llvm-ir",
+          "match": "^\\s*[0-9]+:"
+        },
+        {
+          "name": "entity.name.label.llvm-ir",
+          "match": "^\\s*\"[^\"]+\":"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.llvm-ir",
+          "match": "="
+        },
+        {
+          "name": "punctuation.separator.comma.llvm-ir",
+          "match": ","
+        },
+        {
+          "name": "punctuation.other.asterisk.llvm-ir",
+          "match": "\\*"
+        }
+      ]
+    }
+  }
+}
+

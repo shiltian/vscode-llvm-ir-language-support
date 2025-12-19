@@ -1,0 +1,64 @@
+{
+  "name": "vscode-llvm-ir-language-support",
+  "displayName": "VSCode LLVM IR Language Support",
+  "description": "Syntax highlighting and language support for LLVM Intermediate Representation (IR) files",
+  "version": "1.0.0",
+  "publisher": "Shilei Tian",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "llvm",
+    "llvm-ir",
+    "ir",
+    "compiler",
+    "syntax highlighting"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shiltian/vscode-llvm-ir-language-support"
+  },
+  "license": "MIT",
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:llvm-ir"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "llvm-ir",
+        "aliases": [
+          "LLVM IR",
+          "llvm-ir",
+          "LLVM",
+          "llvm"
+        ],
+        "extensions": [
+          ".ll"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "llvm-ir",
+        "scopeName": "source.llvm-ir",
+        "path": "./syntaxes/llvm-ir.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}
