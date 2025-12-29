@@ -23,9 +23,6 @@
   },
   "license": "MIT",
   "main": "./out/extension.js",
-  "activationEvents": [
-    "onLanguage:llvm-ir"
-  ],
   "contributes": {
     "languages": [
       {

@@ -7,6 +7,7 @@ Syntax highlighting and language support for LLVM IR files (`.ll`).
 - **Syntax Highlighting** - Theme-agnostic, works with light and dark themes
 - **Go to Definition** (`F12` / `Ctrl+Click`)
 - **Find All References** (`Shift+F12`)
+- **Rename Symbol** (`F2`) - Renames only the name part, preserving prefixes
 - **Document Symbols** (`Ctrl+Shift+O`)
 - **Hover Information**
 
