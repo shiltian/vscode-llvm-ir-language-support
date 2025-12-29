@@ -3,6 +3,7 @@ import { LLVMIRDefinitionProvider } from './providers/definitionProvider';
 import { LLVMIRReferenceProvider } from './providers/referenceProvider';
 import { LLVMIRDocumentSymbolProvider } from './providers/documentSymbolProvider';
 import { LLVMIRHoverProvider } from './providers/hoverProvider';
+import { LLVMIRRenameProvider } from './providers/renameProvider';
 import { clearCache, clearAllCache } from './llvmIrParser';
 
 const LLVM_IR_LANGUAGE_ID = 'llvm-ir';
@@ -39,6 +40,14 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerHoverProvider(
             { language: LLVM_IR_LANGUAGE_ID },
             new LLVMIRHoverProvider()
+        )
+    );
+
+    // Register the rename provider
+    context.subscriptions.push(
+        vscode.languages.registerRenameProvider(
+            { language: LLVM_IR_LANGUAGE_ID },
+            new LLVMIRRenameProvider()
         )
     );
 
