@@ -45,4 +45,4 @@ Press `F5` to launch Extension Development Host.
 
 ## License
 
-MIT
+Apache License, Version 2.0
