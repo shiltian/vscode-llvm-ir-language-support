@@ -2,7 +2,7 @@
   "name": "vscode-llvm-ir-language-support",
   "displayName": "VSCode LLVM IR Language Support",
   "description": "Syntax highlighting and language support for LLVM Intermediate Representation (IR) files",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "Shilei Tian",
   "engines": {
     "vscode": "^1.80.0"
@@ -21,7 +21,7 @@
     "type": "git",
     "url": "https://github.com/shiltian/vscode-llvm-ir-language-support"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:llvm-ir"
