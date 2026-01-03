@@ -242,9 +242,10 @@ function parseDefinitions(
         definitions.set(getSymbolKey(SymbolKind.GlobalValue, name), def);
 
         // Parse function parameters - they belong to this function's scope
-        const paramsMatch = line.match(/\(([^)]*)\)/);
-        if (paramsMatch) {
-            parseParameters(paramsMatch[1], lineNum, line, definitions, name);
+        // Use balanced parentheses matching to handle cases like addrspace(1)
+        const paramsStr = extractBalancedParentheses(line, funcDefMatch[0].length - 1);
+        if (paramsStr) {
+            parseParameters(paramsStr, lineNum, line, definitions, name);
         }
     }
 
@@ -571,6 +572,36 @@ function matchAtPosition(
         }
     }
     return null;
+}
+
+/**
+ * Extract content between balanced parentheses starting at a given position.
+ * Handles nested parentheses like in "ptr addrspace(1) %name".
+ * @param line The line to parse
+ * @param startPos The position of the opening '('
+ * @returns The content between the balanced parentheses, or null if not found
+ */
+function extractBalancedParentheses(line: string, startPos: number): string | null {
+    if (line[startPos] !== '(') {
+        return null;
+    }
+
+    let depth = 0;
+    let start = startPos + 1; // Skip the opening '('
+
+    for (let i = startPos; i < line.length; i++) {
+        const char = line[i];
+        if (char === '(') {
+            depth++;
+        } else if (char === ')') {
+            depth--;
+            if (depth === 0) {
+                return line.substring(start, i);
+            }
+        }
+    }
+
+    return null; // No matching closing parenthesis found
 }
 
 /**

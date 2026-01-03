@@ -125,6 +125,29 @@ end:
   ret i32 %result
 }
 
+; Example with addrspace (address space) modifiers in function parameters
+; Test case for Go To Definition with addrspace - all parameters should be navigable
+define amdgpu_ps void @test_swmmac_i32_16x16x128_iu8_i32_index(<8 x i32> %A, <16 x i32> %B, <8 x i32> %C, ptr addrspace(1) %IndexVecPtr, ptr addrspace(1) %IndexVecOutPtr, ptr addrspace(1) %out) {
+bb:
+  %IndexVecPacked = load i64, ptr addrspace(1) %IndexVecPtr, align 8
+  store i64 %IndexVecPacked, ptr addrspace(1) %IndexVecOutPtr
+  %IndexVec = bitcast i64 %IndexVecPacked to <2 x i32>
+  %Index = extractelement <2 x i32> %IndexVec, i32 1
+  %res = call <8 x i32> @llvm.amdgcn.swmmac.i32.16x16x128.iu8.v8i32.v8i32.v16i32.i32(i1 0, <8 x i32> %A, i1 0, <16 x i32> %B, <8 x i32> %C, i32 %Index, i1 false, i1 false)
+  store <8 x i32> %res, ptr addrspace(1) %out
+  ret void
+}
+
+; Another example with multiple address spaces
+define void @multi_addrspace_params(ptr addrspace(0) %private, ptr addrspace(1) %global, ptr addrspace(3) %local, ptr addrspace(4) %constant) {
+entry:
+  %val = load i32, ptr addrspace(1) %global
+  store i32 %val, ptr addrspace(0) %private
+  ret void
+}
+
+declare <8 x i32> @llvm.amdgcn.swmmac.i32.16x16x128.iu8.v8i32.v8i32.v16i32.i32(i1, <8 x i32>, i1, <16 x i32>, <8 x i32>, i32, i1, i1)
+
 ; Metadata examples
 !llvm.module.flags = !{!0, !1}
 !llvm.ident = !{!2}
