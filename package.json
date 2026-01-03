@@ -54,11 +54,21 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run test:unit",
+    "test:unit": "npm run compile && cp src/test/setup.js out/test/ && mocha",
+    "test:integration": "npm run compile && node ./out/test/runTest.js",
+    "pretest:integration": "npm run compile"
   },
   "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/test-electron": "^2.3.8",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.0.0"
   }
 }

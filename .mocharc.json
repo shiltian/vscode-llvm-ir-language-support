@@ -1,0 +1,9 @@
+{
+  "ui": "bdd",
+  "color": true,
+  "timeout": 10000,
+  "require": [
+    "./src/test/setup.js"
+  ],
+  "spec": "out/test/unit/**/*.test.js"
+}
