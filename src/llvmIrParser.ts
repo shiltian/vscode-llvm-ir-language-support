@@ -355,9 +355,15 @@ function parseParameters(
     functionName: string
 ): void {
     // Match parameters like: i32 %argc, ptr %argv
+    // We need to skip type references inside byref(), sret(), inalloca(), preallocated()
+    // These appear as %typename inside parentheses and are NOT parameter names
     const paramRegex = /(%[-a-zA-Z$._][-a-zA-Z$._0-9]*|%"[^"]+"|%[0-9]+)/g;
     let match;
     while ((match = paramRegex.exec(paramsStr)) !== null) {
+        // Skip if preceded by '(' - it's a type reference inside byref(), sret(), etc.
+        if (match.index > 0 && paramsStr[match.index - 1] === '(') {
+            continue;
+        }
         const name = match[1];
         const paramStart = fullLine.indexOf(paramsStr) + match.index;
         const def: SymbolDefinition = {

@@ -157,6 +157,79 @@ entry:
                 const structParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%struct', '@complex_types'));
                 assert.ok(structParam, 'Parameter %struct should be defined');
             });
+
+            it('should not treat type references in byref/sret as parameters', () => {
+                // Type references inside byref(), sret(), inalloca(), preallocated() should NOT be
+                // registered as function parameters - only the actual parameter name should be
+                const content = `%"struct.MyType" = type { i32, i64 }
+
+define void @test_byref(ptr byref(%"struct.MyType") %0) {
+entry:
+  ret void
+}`;
+                const doc = createMockDocument(content);
+                const parsed = parseDocument(doc);
+
+                // The type should be defined as a NamedType
+                const typeDef = parsed.definitions.get(getSymbolKey(SymbolKind.NamedType, '%"struct.MyType"'));
+                assert.ok(typeDef, 'Type %"struct.MyType" should be defined');
+                assert.strictEqual(typeDef.kind, SymbolKind.NamedType);
+
+                // The actual parameter %0 should be defined
+                const param0 = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%0', '@test_byref'));
+                assert.ok(param0, 'Parameter %0 should be defined');
+                assert.strictEqual(param0.detail, 'parameter %0');
+
+                // The type reference inside byref() should NOT be registered as a parameter
+                const wrongParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%"struct.MyType"', '@test_byref'));
+                assert.strictEqual(wrongParam, undefined, 'Type reference inside byref() should NOT be a parameter');
+            });
+
+            it('should handle complex byref with quoted type names containing special characters', () => {
+                // Real-world example: C++ mangled names with :: separators
+                const content = `%"struct.ns::MyClass" = type { ptr, i32 }
+
+define amdgpu_kernel void @kernel(ptr addrspace(4) noundef readonly byref(%"struct.ns::MyClass") align 8 captures(none) %args) {
+entry:
+  ret void
+}`;
+                const doc = createMockDocument(content);
+                const parsed = parseDocument(doc);
+
+                // The type should be defined
+                const typeDef = parsed.definitions.get(getSymbolKey(SymbolKind.NamedType, '%"struct.ns::MyClass"'));
+                assert.ok(typeDef, 'Type %"struct.ns::MyClass" should be defined');
+
+                // The actual parameter %args should be defined
+                const argsParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%args', '@kernel'));
+                assert.ok(argsParam, 'Parameter %args should be defined');
+
+                // Type reference should NOT be a parameter
+                const wrongParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%"struct.ns::MyClass"', '@kernel'));
+                assert.strictEqual(wrongParam, undefined, 'Type reference should NOT be a parameter');
+            });
+
+            it('should not treat type references in sret as parameters', () => {
+                const content = `%struct.Result = type { i64, i64 }
+
+define void @returns_struct(ptr sret(%struct.Result) %result, i32 %input) {
+entry:
+  ret void
+}`;
+                const doc = createMockDocument(content);
+                const parsed = parseDocument(doc);
+
+                // Actual parameters should be defined
+                const resultParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%result', '@returns_struct'));
+                assert.ok(resultParam, 'Parameter %result should be defined');
+
+                const inputParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%input', '@returns_struct'));
+                assert.ok(inputParam, 'Parameter %input should be defined');
+
+                // Type reference should NOT be a parameter
+                const wrongParam = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%struct.Result', '@returns_struct'));
+                assert.strictEqual(wrongParam, undefined, 'Type reference in sret() should NOT be a parameter');
+            });
         });
 
         describe('Local Value Definitions', () => {
