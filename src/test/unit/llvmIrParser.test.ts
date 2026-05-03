@@ -6,6 +6,8 @@
  */
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Import parser - vscode is mocked by setup.ts
 import {
@@ -598,6 +600,20 @@ entry:
 
             assert.strictEqual(key1, key2, 'Global values should have same key regardless of function context');
         });
+    });
+});
+
+describe('LLVM IR Grammar', () => {
+    it('should classify splat as a language constant', () => {
+        const grammarPath = path.resolve(__dirname, '../../../syntaxes/llvm-ir.tmLanguage.json');
+        const grammar = JSON.parse(fs.readFileSync(grammarPath, 'utf8'));
+        const constantPatterns = grammar.repository.constants.patterns;
+        const languageConstants = constantPatterns.find((pattern: { name?: string }) =>
+            pattern.name === 'constant.language.llvm-ir'
+        );
+
+        assert.ok(languageConstants, 'Language constant pattern should exist');
+        assert.match('splat', new RegExp(languageConstants.match), 'splat should be highlighted as a constant');
     });
 });
 

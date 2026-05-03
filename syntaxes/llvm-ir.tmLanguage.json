@@ -98,7 +98,7 @@
       "patterns": [
         {
           "name": "constant.language.llvm-ir",
-          "match": "\\b(true|false|null|none|undef|poison|zeroinitializer)\\b"
+          "match": "\\b(true|false|null|none|undef|poison|zeroinitializer|splat)\\b"
         },
         {
           "name": "constant.numeric.float.llvm-ir",
