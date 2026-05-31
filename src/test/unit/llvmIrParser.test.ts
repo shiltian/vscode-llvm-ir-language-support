@@ -371,10 +371,18 @@ for.end:
         describe('Metadata Definitions', () => {
             it('should parse named metadata', () => {
                 const content = `!llvm.module.flags = !{!0, !1}
+!llvm.ident = !{!2}
 !0 = !{i32 1, !"wchar_size", i32 4}
-!1 = !{i32 7, !"uwtable", i32 2}`;
+!1 = !{i32 7, !"uwtable", i32 2}
+!2 = !{!"clang"}`;
                 const doc = createMockDocument(content);
                 const parsed = parseDocument(doc);
+
+                const moduleFlags = parsed.definitions.get(getSymbolKey(SymbolKind.Metadata, '!llvm.module.flags'));
+                assert.ok(moduleFlags, 'Dotted metadata !llvm.module.flags should be defined');
+
+                const ident = parsed.definitions.get(getSymbolKey(SymbolKind.Metadata, '!llvm.ident'));
+                assert.ok(ident, 'Dotted metadata !llvm.ident should be defined');
 
                 const meta0 = parsed.definitions.get(getSymbolKey(SymbolKind.Metadata, '!0'));
                 assert.ok(meta0, 'Metadata !0 should be defined');
@@ -460,6 +468,26 @@ entry:
                 assert.ok(metaRefs.length > 0, 'Reference to !5 should be found');
             });
 
+            it('should parse dotted metadata references', () => {
+                const content = `!llvm.module.flags = !{!0}
+!llvm.ident = !{!1}
+!named = !{!llvm.ident}
+!0 = !{i32 1, !"wchar_size", i32 4}
+!1 = !{!"clang"}`;
+                const doc = createMockDocument(content);
+                const parsed = parseDocument(doc);
+
+                const moduleFlagsRefs = parsed.references.filter(r => r.name === '!llvm.module.flags');
+                assert.strictEqual(moduleFlagsRefs.length, 0, 'Dotted metadata definition should not be a reference');
+
+                const identRefs = parsed.references.filter(r => r.name === '!llvm.ident');
+                assert.strictEqual(identRefs.length, 1, 'Dotted metadata reference should be found');
+
+                const symbol = getSymbolAtPosition(doc, new vscodeMock.Position(0, 3));
+                assert.ok(symbol, 'Dotted metadata symbol should be found');
+                assert.strictEqual(symbol.name, '!llvm.module.flags');
+            });
+
             it('should parse attribute group references', () => {
                 const content = `define void @test() #0 {
   ret void
@@ -514,6 +542,27 @@ default:
                 assert.ok(scope, 'Scope for @test should exist');
                 assert.strictEqual(scope.startLine, 0);
                 assert.ok(scope.endLine > scope.startLine, 'End line should be after start line');
+            });
+
+            it('should ignore braces in strings and comments for function scope', () => {
+                const content = `define void @first() {
+entry:
+  call void @use(ptr @.str)
+  ret void ; } should not close the function early
+}
+
+@.str = private constant [8 x i8] c"{ text }\\00"
+
+define void @second() {
+entry:
+  ret void
+}`;
+                const doc = createMockDocument(content);
+                const parsed = parseDocument(doc);
+
+                assert.ok(parsed.functionScopes.find(s => s.name === '@first'), 'First function scope should exist');
+                assert.ok(parsed.functionScopes.find(s => s.name === '@second'), 'Second function scope should exist');
+                assert.strictEqual(parsed.functionScopes.length, 2, 'Comment braces should not corrupt function scopes');
             });
         });
     });
@@ -577,6 +626,21 @@ entry:
             const symbol = getSymbolAtPosition(doc, position);
             assert.strictEqual(symbol, null, 'Should return null for comment');
         });
+
+        it('should identify indented labels at cursor position', () => {
+            const content = `define void @test() {
+  entry:
+    ret void
+}`;
+            const doc = createMockDocument(content);
+            const position = new vscodeMock.Position(1, 4);
+
+            const symbol = getSymbolAtPosition(doc, position);
+            assert.ok(symbol, 'Indented label symbol should be found');
+            assert.strictEqual(symbol.name, 'entry');
+            assert.strictEqual(symbol.kind, SymbolKind.Label);
+            assert.strictEqual(symbol.range.start.character, 2);
+        });
     });
 
     describe('getSymbolKey', () => {
@@ -614,6 +678,16 @@ describe('LLVM IR Grammar', () => {
 
         assert.ok(languageConstants, 'Language constant pattern should exist');
         assert.match('splat', new RegExp(languageConstants.match), 'splat should be highlighted as a constant');
+    });
+
+    it('should include all LLVM IR sigil symbols in the word pattern', () => {
+        const languageConfigPath = path.resolve(__dirname, '../../../language-configuration.json');
+        const languageConfig = JSON.parse(fs.readFileSync(languageConfigPath, 'utf8'));
+        const wordPattern = new RegExp(languageConfig.wordPattern);
+
+        for (const symbol of ['%local', '@global', '!llvm.module.flags', '!0', '#12', '$comdat']) {
+            assert.match(symbol, wordPattern, `${symbol} should match the word pattern`);
+        }
     });
 });
 
@@ -665,5 +739,64 @@ define void @"function with spaces"() {
 
         const paramDef = parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%input', '@long_vector_func'));
         assert.ok(paramDef, 'Parameter in function with long type should be defined');
+    });
+
+    it('should handle CRLF line endings and indented labels', () => {
+        const content = 'define void @test() {\r\n  entry:\r\n    br label %exit\r\n  exit:\r\n    ret void\r\n}';
+        const doc = createMockDocument(content);
+        const parsed = parseDocument(doc);
+
+        const entry = parsed.definitions.get(getSymbolKey(SymbolKind.Label, 'entry', '@test'));
+        assert.ok(entry, 'Indented CRLF label entry should be defined');
+        assert.strictEqual(entry.selectionRange.start.character, 2);
+
+        const exit = parsed.definitions.get(getSymbolKey(SymbolKind.Label, 'exit', '@test'));
+        assert.ok(exit, 'Indented CRLF label exit should be defined');
+    });
+
+    it('should not parse named types in signatures as local parameters', () => {
+        const content = `%struct.T = type { i32 }
+define void @typed(%struct.T* %p, ptr byref(%struct.T) %0) {
+entry:
+  ret void
+}`;
+        const doc = createMockDocument(content);
+        const parsed = parseDocument(doc);
+
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.NamedType, '%struct.T')));
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%p', '@typed')));
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%0', '@typed')));
+        assert.strictEqual(
+            parsed.definitions.get(getSymbolKey(SymbolKind.LocalValue, '%struct.T', '@typed')),
+            undefined,
+            'Named type %struct.T should not be registered as a local parameter'
+        );
+    });
+
+    it('should ignore symbol-looking text inside comments and string literals', () => {
+        const content = `@.str = private constant [18 x i8] c"hello; @not_global\\00"
+define void @test() {
+entry:
+  ret void ; @comment_global %comment_local !comment.meta
+}`;
+        const doc = createMockDocument(content);
+        const parsed = parseDocument(doc);
+
+        assert.strictEqual(parsed.references.some(r => r.name === '@not_global'), false);
+        assert.strictEqual(parsed.references.some(r => r.name === '@comment_global'), false);
+        assert.strictEqual(parsed.references.some(r => r.name === '%comment_local'), false);
+        assert.strictEqual(parsed.references.some(r => r.name === '!comment.meta'), false);
+    });
+
+    it('should parse alias, ifunc, and comdat definitions', () => {
+        const content = `$c = comdat any
+@aliased = alias i32, ptr @target
+@resolver = ifunc i32 (), ptr @resolve`;
+        const doc = createMockDocument(content);
+        const parsed = parseDocument(doc);
+
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.Comdat, '$c')), 'Comdat should be defined');
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.GlobalValue, '@aliased')), 'Alias should be defined');
+        assert.ok(parsed.definitions.get(getSymbolKey(SymbolKind.GlobalValue, '@resolver')), 'IFUNC should be defined');
     });
 });

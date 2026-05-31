@@ -84,6 +84,33 @@ export interface ResolvedSymbol {
  */
 const documentCache = new Map<string, { version: number; parsed: ParsedDocument }>();
 
+const LOCAL_NAME_PATTERN = '%(?:[-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)';
+const GLOBAL_NAME_PATTERN = '@(?:[-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)';
+const LABEL_NAME_PATTERN = '(?:[-a-zA-Z$._][-a-zA-Z$._0-9]*|[0-9]+|"[^"]+")';
+const METADATA_NAME_PATTERN = '!(?:[a-zA-Z_][a-zA-Z0-9_.]*|[0-9]+)';
+const ATTRIBUTE_GROUP_PATTERN = '#[0-9]+';
+const COMDAT_NAME_PATTERN = '\\$(?:[-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+")';
+
+function localRegex(flags = ''): RegExp {
+    return new RegExp(LOCAL_NAME_PATTERN, flags);
+}
+
+function globalRegex(flags = ''): RegExp {
+    return new RegExp(GLOBAL_NAME_PATTERN, flags);
+}
+
+function metadataRegex(flags = ''): RegExp {
+    return new RegExp(`${METADATA_NAME_PATTERN}(?![a-zA-Z0-9_.])`, flags);
+}
+
+function attributeGroupRegex(flags = ''): RegExp {
+    return new RegExp(ATTRIBUTE_GROUP_PATTERN, flags);
+}
+
+function comdatRegex(flags = ''): RegExp {
+    return new RegExp(COMDAT_NAME_PATTERN, flags);
+}
+
 /**
  * Get the symbol key for lookups (combines kind, name, and optionally function scope)
  */
@@ -150,6 +177,107 @@ function buildFunctionNameByLine(
     return functionNameByLine;
 }
 
+function normalizeLines(text: string): string[] {
+    return text.replace(/\r\n?/g, '\n').split('\n');
+}
+
+function getCodeBeforeComment(line: string): string {
+    let inString = false;
+    let stringStart = -1;
+
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+
+        if (inString) {
+            if (char === '\\') {
+                i++;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === ';') {
+            return line.substring(0, i);
+        }
+
+        if (char === '"') {
+            inString = true;
+            stringStart = i;
+        }
+    }
+
+    return stringStart >= 0 || inString ? line : line;
+}
+
+function getReferenceCode(line: string): string {
+    const code = getCodeBeforeComment(line);
+    const chars = code.split('');
+
+    for (let i = 0; i < chars.length; i++) {
+        const char = chars[i];
+        const prev = i > 0 ? chars[i - 1] : '';
+
+        if (char !== '"') {
+            continue;
+        }
+
+        // Quoted identifiers use a sigil before the quote and should remain matchable.
+        if (prev === '@' || prev === '%' || prev === '$') {
+            i = skipQuotedString(chars, i);
+            continue;
+        }
+
+        const end = skipQuotedString(chars, i);
+        for (let j = i; j <= end && j < chars.length; j++) {
+            chars[j] = ' ';
+        }
+        i = end;
+    }
+
+    return chars.join('');
+}
+
+function skipQuotedString(chars: string[], start: number): number {
+    for (let i = start + 1; i < chars.length; i++) {
+        if (chars[i] === '\\') {
+            i++;
+        } else if (chars[i] === '"') {
+            return i;
+        }
+    }
+    return chars.length - 1;
+}
+
+function countBracesOutsideStringsAndComments(line: string): number {
+    const code = getCodeBeforeComment(line);
+    let inString = false;
+    let delta = 0;
+
+    for (let i = 0; i < code.length; i++) {
+        const char = code[i];
+
+        if (inString) {
+            if (char === '\\') {
+                i++;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+        } else if (char === '{') {
+            delta++;
+        } else if (char === '}') {
+            delta--;
+        }
+    }
+
+    return delta;
+}
+
 /**
  * Parse a document and extract all definitions and references
  */
@@ -167,7 +295,7 @@ export function parseDocument(
     const referencesByKey = new Map<string, SymbolReference[]>();
     const functionScopes: FunctionScope[] = [];
     const text = document.getText();
-    const lines = text.split('\n');
+    const lines = normalizeLines(text);
 
     // First pass: find all function boundaries
     let currentFunction: string | null = null;
@@ -188,20 +316,16 @@ export function parseDocument(
         }
 
         // Function definition start: define ... @name(...) ... {
-        const funcMatch = line.match(/^\s*define\s+.*?@([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)\s*\(/);
+        const funcMatch = line.match(new RegExp(`^\\s*define\\s+.*?(${GLOBAL_NAME_PATTERN})\\s*\\(`));
         if (funcMatch && currentFunction === null) {
-            currentFunction = '@' + funcMatch[1];
+            currentFunction = funcMatch[1];
             functionStartLine = lineNum;
             braceDepth = 0; // Will be counted below
         }
 
         // Track braces for function body
         if (currentFunction !== null) {
-            // Count braces (simple approach, doesn't handle braces in strings/comments perfectly)
-            for (const char of line) {
-                if (char === '{') braceDepth++;
-                else if (char === '}') braceDepth--;
-            }
+            braceDepth += countBracesOutsideStringsAndComments(line);
 
             if (braceDepth === 0 && functionStartLine >= 0) {
                 functionScopes.push({
@@ -257,7 +381,7 @@ function parseDefinitions(
     functionScopes: FunctionScope[]
 ): void {
     // Named type definition: %typename = type ...
-    const typeMatch = line.match(/^\s*(%[-a-zA-Z$._][-a-zA-Z$._0-9]*|%"[^"]+")\s*=\s*type\b/);
+    const typeMatch = line.match(new RegExp(`^\\s*(${LOCAL_NAME_PATTERN})\\s*=\\s*type\\b`));
     if (typeMatch) {
         const name = typeMatch[1];
         const startCol = line.indexOf(name);
@@ -273,7 +397,7 @@ function parseDefinitions(
     }
 
     // Global variable definition: @name = ...
-    const globalVarMatch = line.match(/^\s*(@[-a-zA-Z$._][-a-zA-Z$._0-9]*|@"[^"]+"|@[0-9]+)\s*=/);
+    const globalVarMatch = line.match(new RegExp(`^\\s*(${GLOBAL_NAME_PATTERN})\\s*=`));
     if (globalVarMatch && !line.includes(' alias ') && !line.includes(' ifunc ') && !line.match(/^\s*define\b/)) {
         const name = globalVarMatch[1];
         const startCol = line.indexOf(name);
@@ -288,7 +412,7 @@ function parseDefinitions(
     }
 
     // Alias definition: @name = ... alias ...
-    const aliasMatch = line.match(/^\s*(@[-a-zA-Z$._][-a-zA-Z$._0-9]*|@"[^"]+"|@[0-9]+)\s*=.*\balias\b/);
+    const aliasMatch = line.match(new RegExp(`^\\s*(${GLOBAL_NAME_PATTERN})\\s*=.*\\balias\\b`));
     if (aliasMatch) {
         const name = aliasMatch[1];
         const startCol = line.indexOf(name);
@@ -302,8 +426,23 @@ function parseDefinitions(
         definitions.set(getSymbolKey(SymbolKind.GlobalValue, name), def);
     }
 
+    // IFUNC definition: @name = ... ifunc ...
+    const ifuncMatch = line.match(new RegExp(`^\\s*(${GLOBAL_NAME_PATTERN})\\s*=.*\\bifunc\\b`));
+    if (ifuncMatch) {
+        const name = ifuncMatch[1];
+        const startCol = line.indexOf(name);
+        const def: SymbolDefinition = {
+            name,
+            kind: SymbolKind.GlobalValue,
+            range: new vscode.Range(lineNum, 0, lineNum, line.length),
+            selectionRange: new vscode.Range(lineNum, startCol, lineNum, startCol + name.length),
+            detail: 'ifunc: ' + line.trim(),
+        };
+        definitions.set(getSymbolKey(SymbolKind.GlobalValue, name), def);
+    }
+
     // Function definition: define ... @name(...)
-    const funcDefMatch = line.match(/^\s*define\s+.*?(@[-a-zA-Z$._][-a-zA-Z$._0-9]*|@"[^"]+"|@[0-9]+)\s*\(/);
+    const funcDefMatch = line.match(new RegExp(`^\\s*define\\s+.*?(${GLOBAL_NAME_PATTERN})\\s*\\(`));
     if (funcDefMatch) {
         const name = funcDefMatch[1];
         const startCol = line.indexOf(name);
@@ -333,7 +472,7 @@ function parseDefinitions(
     }
 
     // Function declaration: declare ... @name(...)
-    const funcDeclMatch = line.match(/^\s*declare\s+.*?(@[-a-zA-Z$._][-a-zA-Z$._0-9]*|@"[^"]+"|@[0-9]+)\s*\(/);
+    const funcDeclMatch = line.match(new RegExp(`^\\s*declare\\s+.*?(${GLOBAL_NAME_PATTERN})\\s*\\(`));
     if (funcDeclMatch) {
         const name = funcDeclMatch[1];
         const startCol = line.indexOf(name);
@@ -350,7 +489,7 @@ function parseDefinitions(
 
     // Local value definition: %name = ... (must be inside a function)
     if (currentFunction) {
-        const localMatch = line.match(/^\s*(%[-a-zA-Z$._][-a-zA-Z$._0-9]*|%"[^"]+"|%[0-9]+)\s*=/);
+        const localMatch = line.match(new RegExp(`^\\s*(${LOCAL_NAME_PATTERN})\\s*=`));
         if (localMatch && !typeMatch) {  // Exclude type definitions
             const name = localMatch[1];
             const startCol = line.indexOf(name);
@@ -366,14 +505,15 @@ function parseDefinitions(
         }
 
         // Label definition: labelname: (must be inside a function)
-        const labelMatch = line.match(/^([-a-zA-Z$._][-a-zA-Z$._0-9]*|[0-9]+|"[^"]+"):\s*(;.*)?$/);
+        const labelMatch = line.match(new RegExp(`^(\\s*)(${LABEL_NAME_PATTERN}):\\s*(;.*)?$`));
         if (labelMatch) {
-            const name = labelMatch[1];
+            const indent = labelMatch[1].length;
+            const name = labelMatch[2];
             const def: SymbolDefinition = {
                 name,
                 kind: SymbolKind.Label,
                 range: new vscode.Range(lineNum, 0, lineNum, line.length),
-                selectionRange: new vscode.Range(lineNum, 0, lineNum, name.length),
+                selectionRange: new vscode.Range(lineNum, indent, lineNum, indent + name.length),
                 detail: `label ${name}`,
                 functionName: currentFunction,
             };
@@ -382,7 +522,7 @@ function parseDefinitions(
     }
 
     // Metadata definition: !name = ... or !0 = ...
-    const metadataMatch = line.match(/^\s*(![a-zA-Z_][a-zA-Z0-9_]*|![0-9]+)\s*=/);
+    const metadataMatch = line.match(new RegExp(`^\\s*(${METADATA_NAME_PATTERN})\\s*=`));
     if (metadataMatch) {
         const name = metadataMatch[1];
         const startCol = line.indexOf(name);
@@ -397,7 +537,7 @@ function parseDefinitions(
     }
 
     // Attribute group definition: attributes #0 = { ... }
-    const attrMatch = line.match(/^\s*attributes\s+(#[0-9]+)\s*=/);
+    const attrMatch = line.match(new RegExp(`^\\s*attributes\\s+(${ATTRIBUTE_GROUP_PATTERN})\\s*=`));
     if (attrMatch) {
         const name = attrMatch[1];
         const startCol = line.indexOf(name);
@@ -412,7 +552,7 @@ function parseDefinitions(
     }
 
     // Comdat definition: $name = comdat ...
-    const comdatMatch = line.match(/^\s*(\$[-a-zA-Z$._][-a-zA-Z$._0-9]*|\$"[^"]+")\s*=\s*comdat\b/);
+    const comdatMatch = line.match(new RegExp(`^\\s*(${COMDAT_NAME_PATTERN})\\s*=\\s*comdat\\b`));
     if (comdatMatch) {
         const name = comdatMatch[1];
         const startCol = line.indexOf(name);
@@ -437,18 +577,16 @@ function parseParameters(
     definitions: Map<string, SymbolDefinition>,
     functionName: string
 ): void {
-    // Match parameters like: i32 %argc, ptr %argv
-    // We need to skip type references inside byref(), sret(), inalloca(), preallocated()
-    // These appear as %typename inside parentheses and are NOT parameter names
-    const paramRegex = /(%[-a-zA-Z$._][-a-zA-Z$._0-9]*|%"[^"]+"|%[0-9]+)/g;
-    let match;
-    while ((match = paramRegex.exec(paramsStr)) !== null) {
-        // Skip if preceded by '(' - it's a type reference inside byref(), sret(), etc.
-        if (match.index > 0 && paramsStr[match.index - 1] === '(') {
+    const paramsStart = fullLine.indexOf(paramsStr);
+
+    for (const parameter of splitTopLevelParameters(paramsStr)) {
+        const match = getParameterNameMatch(parameter.text);
+        if (!match) {
             continue;
         }
-        const name = match[1];
-        const paramStart = fullLine.indexOf(paramsStr) + match.index;
+
+        const name = match[0];
+        const paramStart = paramsStart + parameter.start + match.index;
         const def: SymbolDefinition = {
             name,
             kind: SymbolKind.LocalValue,
@@ -461,6 +599,78 @@ function parseParameters(
     }
 }
 
+function splitTopLevelParameters(paramsStr: string): { text: string; start: number }[] {
+    const parameters: { text: string; start: number }[] = [];
+    let start = 0;
+    let parenDepth = 0;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    let angleDepth = 0;
+    let inString = false;
+
+    for (let i = 0; i < paramsStr.length; i++) {
+        const char = paramsStr[i];
+
+        if (inString) {
+            if (char === '\\') {
+                i++;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+        } else if (char === '(') {
+            parenDepth++;
+        } else if (char === ')') {
+            parenDepth = Math.max(0, parenDepth - 1);
+        } else if (char === '{') {
+            braceDepth++;
+        } else if (char === '}') {
+            braceDepth = Math.max(0, braceDepth - 1);
+        } else if (char === '[') {
+            bracketDepth++;
+        } else if (char === ']') {
+            bracketDepth = Math.max(0, bracketDepth - 1);
+        } else if (char === '<') {
+            angleDepth++;
+        } else if (char === '>') {
+            angleDepth = Math.max(0, angleDepth - 1);
+        } else if (
+            char === ',' &&
+            parenDepth === 0 &&
+            braceDepth === 0 &&
+            bracketDepth === 0 &&
+            angleDepth === 0
+        ) {
+            parameters.push({ text: paramsStr.substring(start, i), start });
+            start = i + 1;
+        }
+    }
+
+    parameters.push({ text: paramsStr.substring(start), start });
+    return parameters;
+}
+
+function getParameterNameMatch(parameter: string): RegExpExecArray | null {
+    const regex = localRegex('g');
+    let match: RegExpExecArray | null;
+    let lastMatch: RegExpExecArray | null = null;
+
+    while ((match = regex.exec(parameter)) !== null) {
+        lastMatch = match;
+    }
+
+    if (!lastMatch) {
+        return null;
+    }
+
+    const afterName = parameter.substring(lastMatch.index + lastMatch[0].length).trim();
+    return /^[*)\]}>]/.test(afterName) ? null : lastMatch;
+}
+
 /**
  * Parse references from a line
  */
@@ -471,15 +681,13 @@ function parseReferences(
     referencesByKey: Map<string, SymbolReference[]>,
     currentFunction: string | null
 ): void {
-    // Skip comment-only lines
-    const commentStart = line.indexOf(';');
-    const codePart = commentStart >= 0 ? line.substring(0, commentStart) : line;
+    const codePart = getReferenceCode(line);
 
     // Global references: @name, @"name", @0
-    const globalRegex = /@([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g;
+    const globalRefRegex = globalRegex('g');
     let match;
-    while ((match = globalRegex.exec(codePart)) !== null) {
-        const fullName = '@' + match[1];
+    while ((match = globalRefRegex.exec(codePart)) !== null) {
+        const fullName = match[0];
         addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.GlobalValue,
@@ -488,9 +696,9 @@ function parseReferences(
     }
 
     // Local references: %name, %"name", %0
-    const localRegex = /%([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g;
-    while ((match = localRegex.exec(codePart)) !== null) {
-        const fullName = '%' + match[1];
+    const localRefRegex = localRegex('g');
+    while ((match = localRefRegex.exec(codePart)) !== null) {
+        const fullName = match[0];
         addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.LocalValue,
@@ -500,7 +708,7 @@ function parseReferences(
     }
 
     // Label references in branch instructions: label %labelname or br ... label %name
-    const labelRefRegex = /\blabel\s+%([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g;
+    const labelRefRegex = new RegExp(`\\blabel\\s+%(${LABEL_NAME_PATTERN})`, 'g');
     while ((match = labelRefRegex.exec(codePart)) !== null) {
         const labelName = match[1];
         const fullMatch = match[0];
@@ -514,24 +722,24 @@ function parseReferences(
     }
 
     // Metadata references: !name, !0
-    const metadataRegex = /(!(?:[a-zA-Z_][a-zA-Z0-9_]*|[0-9]+))(?![a-zA-Z0-9_])/g;
-    while ((match = metadataRegex.exec(codePart)) !== null) {
+    const metadataRefRegex = metadataRegex('g');
+    while ((match = metadataRefRegex.exec(codePart)) !== null) {
         // Skip if it's a definition (has = after it)
-        const afterMatch = codePart.substring(match.index + match[1].length).trim();
+        const afterMatch = codePart.substring(match.index + match[0].length).trim();
         if (afterMatch.startsWith('=')) {
             continue;
         }
         addReference(references, referencesByKey, {
-            name: match[1],
+            name: match[0],
             kind: SymbolKind.Metadata,
-            range: new vscode.Range(lineNum, match.index, lineNum, match.index + match[1].length),
+            range: new vscode.Range(lineNum, match.index, lineNum, match.index + match[0].length),
         });
     }
 
     // Attribute group references: #0
-    const attrRegex = /#([0-9]+)/g;
+    const attrRegex = attributeGroupRegex('g');
     while ((match = attrRegex.exec(codePart)) !== null) {
-        const fullName = '#' + match[1];
+        const fullName = match[0];
         addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.AttributeGroup,
@@ -540,7 +748,7 @@ function parseReferences(
     }
 
     // Comdat references: comdat($name)
-    const comdatRefRegex = /comdat\s*\((\$[-a-zA-Z$._][-a-zA-Z$._0-9]*|\$"[^"]+")\)/g;
+    const comdatRefRegex = new RegExp(`comdat\\s*\\((${COMDAT_NAME_PATTERN})\\)`, 'g');
     while ((match = comdatRefRegex.exec(codePart)) !== null) {
         const name = match[1];
         const nameStart = match.index + match[0].indexOf(name);
@@ -627,23 +835,24 @@ export function getRawSymbolAtPosition(
     document: vscode.TextDocument,
     position: vscode.Position
 ): SymbolAtPosition | null {
-    const line = document.lineAt(position.line).text;
+    const line = document.lineAt(position.line).text.replace(/\r$/, '');
+    const codePart = getReferenceCode(line);
     const col = position.character;
 
     // Check for global identifier
-    const globalMatch = matchAtPosition(line, col, /@([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g);
+    const globalMatch = matchAtPosition(codePart, col, globalRegex('g'));
     if (globalMatch) {
         return {
-            name: '@' + globalMatch.match[1],
+            name: globalMatch.match[0],
             kind: SymbolKind.GlobalValue,
             range: new vscode.Range(position.line, globalMatch.start, position.line, globalMatch.end),
         };
     }
 
     // Check for local identifier or type
-    const localMatch = matchAtPosition(line, col, /%([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g);
+    const localMatch = matchAtPosition(codePart, col, localRegex('g'));
     if (localMatch) {
-        const name = '%' + localMatch.match[1];
+        const name = localMatch.match[0];
         return {
             name,
             kind: SymbolKind.LocalValue,
@@ -652,37 +861,41 @@ export function getRawSymbolAtPosition(
     }
 
     // Check for label (without prefix, at start of line)
-    const labelDefMatch = line.match(/^([-a-zA-Z$._][-a-zA-Z$._0-9]*|[0-9]+|"[^"]+"):/);
-    if (labelDefMatch && col <= labelDefMatch[1].length) {
-        return {
-            name: labelDefMatch[1],
-            kind: SymbolKind.Label,
-            range: new vscode.Range(position.line, 0, position.line, labelDefMatch[1].length),
-        };
+    const labelDefMatch = line.match(new RegExp(`^(\\s*)(${LABEL_NAME_PATTERN}):`));
+    if (labelDefMatch) {
+        const indent = labelDefMatch[1].length;
+        const name = labelDefMatch[2];
+        if (col >= indent && col <= indent + name.length) {
+            return {
+                name,
+                kind: SymbolKind.Label,
+                range: new vscode.Range(position.line, indent, position.line, indent + name.length),
+            };
+        }
     }
 
     // Check for metadata
-    const metadataMatch = matchAtPosition(line, col, /!([a-zA-Z_][a-zA-Z0-9_]*|[0-9]+)/g);
+    const metadataMatch = matchAtPosition(codePart, col, metadataRegex('g'));
     if (metadataMatch) {
         return {
-            name: '!' + metadataMatch.match[1],
+            name: metadataMatch.match[0],
             kind: SymbolKind.Metadata,
             range: new vscode.Range(position.line, metadataMatch.start, position.line, metadataMatch.end),
         };
     }
 
     // Check for attribute group
-    const attrMatch = matchAtPosition(line, col, /#([0-9]+)/g);
+    const attrMatch = matchAtPosition(codePart, col, attributeGroupRegex('g'));
     if (attrMatch) {
         return {
-            name: '#' + attrMatch.match[1],
+            name: attrMatch.match[0],
             kind: SymbolKind.AttributeGroup,
             range: new vscode.Range(position.line, attrMatch.start, position.line, attrMatch.end),
         };
     }
 
     // Check for comdat
-    const comdatMatch = matchAtPosition(line, col, /\$[-a-zA-Z$._][-a-zA-Z$._0-9]*|\$"[^"]+"/g);
+    const comdatMatch = matchAtPosition(codePart, col, comdatRegex('g'));
     if (comdatMatch) {
         return {
             name: comdatMatch.match[0],

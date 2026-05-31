@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
+    getSymbolKey,
     parseDocument,
-    toVSCodeSymbolKind,
     SymbolKind,
     SymbolDefinition,
 } from '../llvmIrParser';
@@ -21,14 +21,23 @@ export class LLVMIRDocumentSymbolProvider implements vscode.DocumentSymbolProvid
         const metadata: SymbolDefinition[] = [];
         const attributes: SymbolDefinition[] = [];
 
-        for (const [key, def] of parsed.definitions) {
+        const seenDefinitions = new Set<string>();
+
+        for (const def of parsed.definitions.values()) {
+            const definitionLocationKey =
+                `${def.kind}:${def.name}:${def.selectionRange.start.line}:${def.selectionRange.start.character}`;
+            if (seenDefinitions.has(definitionLocationKey)) {
+                continue;
+            }
+            seenDefinitions.add(definitionLocationKey);
+
             switch (def.kind) {
                 case SymbolKind.Function:
                     functions.push(def);
                     break;
                 case SymbolKind.GlobalValue:
                     // Skip if it's also registered as a function
-                    if (!parsed.definitions.has(key.replace('GlobalValue', 'Function'))) {
+                    if (!parsed.definitions.has(getSymbolKey(SymbolKind.Function, def.name))) {
                         globals.push(def);
                     }
                     break;

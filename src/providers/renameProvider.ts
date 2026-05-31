@@ -35,11 +35,16 @@ function getSymbolPrefix(kind: SymbolKind, name: string): string {
  * Extract the name without prefix
  */
 function getNameWithoutPrefix(name: string): string {
-    if (name.startsWith('%') || name.startsWith('@') || name.startsWith('!') ||
-        name.startsWith('#') || name.startsWith('$')) {
-        return name.substring(1);
+    const withoutPrefix = name.startsWith('%') || name.startsWith('@') || name.startsWith('!') ||
+        name.startsWith('#') || name.startsWith('$')
+        ? name.substring(1)
+        : name;
+
+    if (withoutPrefix.startsWith('"') && withoutPrefix.endsWith('"')) {
+        return withoutPrefix.substring(1, withoutPrefix.length - 1);
     }
-    return name;
+
+    return withoutPrefix;
 }
 
 /**
@@ -47,15 +52,61 @@ function getNameWithoutPrefix(name: string): string {
  */
 function getNameOnlyRange(range: vscode.Range, fullName: string): vscode.Range {
     const prefix = fullName.match(/^[%@!#$]/)?.[0] || '';
-    if (prefix) {
+    const startsWithQuote = fullName.substring(prefix.length).startsWith('"');
+    const endsWithQuote = fullName.endsWith('"');
+    const startOffset = prefix.length + (startsWithQuote ? 1 : 0);
+    const endOffset = endsWithQuote ? 1 : 0;
+
+    if (startOffset || endOffset) {
         return new vscode.Range(
             range.start.line,
-            range.start.character + prefix.length,
+            range.start.character + startOffset,
             range.end.line,
-            range.end.character
+            range.end.character - endOffset
         );
     }
     return range;
+}
+
+function isQuotedIdentifier(name: string): boolean {
+    const withoutPrefix = name.startsWith('%') || name.startsWith('@') || name.startsWith('$')
+        ? name.substring(1)
+        : name;
+    return withoutPrefix.startsWith('"') && withoutPrefix.endsWith('"');
+}
+
+function validateNewName(kind: SymbolKind, oldName: string, newName: string): void {
+    if (newName.length === 0) {
+        throw new Error('New name cannot be empty');
+    }
+
+    if (/^[%@!#$]/.test(newName)) {
+        throw new Error('Enter the name without the LLVM IR prefix');
+    }
+
+    if (isQuotedIdentifier(oldName)) {
+        if (newName.includes('"')) {
+            throw new Error('Quoted LLVM IR names cannot contain double quotes');
+        }
+        return;
+    }
+
+    switch (kind) {
+        case SymbolKind.Metadata:
+            if (!/^(?:[a-zA-Z_][a-zA-Z0-9_.]*|[0-9]+)$/.test(newName)) {
+                throw new Error('Invalid metadata name');
+            }
+            return;
+        case SymbolKind.AttributeGroup:
+            if (!/^[0-9]+$/.test(newName)) {
+                throw new Error('Attribute group names must be numeric');
+            }
+            return;
+        default:
+            if (!/^(?:[-a-zA-Z$._][-a-zA-Z$._0-9]*|[0-9]+)$/.test(newName)) {
+                throw new Error('Invalid LLVM IR name');
+            }
+    }
 }
 
 export class LLVMIRRenameProvider implements vscode.RenameProvider {
@@ -115,16 +166,16 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
         // Resolve the symbol to find the actual definition and kind
         const resolved = resolveSymbol(parsed, symbol);
         const { definition, actualKind } = resolved;
+        validateNewName(actualKind, definition?.name || symbol.name, newName);
 
         // Collect all locations that need to be renamed
-        const locationsToRename: { range: vscode.Range; prefix: string }[] = [];
+        const locationsToRename: { range: vscode.Range; fullName: string }[] = [];
 
         // Add the definition location if it exists
         if (definition) {
-            const prefix = getSymbolPrefix(actualKind, definition.name);
             locationsToRename.push({
                 range: definition.selectionRange,
-                prefix: prefix,
+                fullName: definition.name,
             });
         }
 
@@ -137,21 +188,15 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
             }
             locationsToRename.push({
                 range: ref.range,
-                prefix: getSymbolPrefix(ref.kind, ref.name),
+                fullName: ref.name,
             });
         }
 
         // Create text edits for all locations
         for (const location of locationsToRename) {
             // Calculate the range for just the name part (after the prefix)
-            const nameOnlyRange = getNameOnlyRange(location.range, location.prefix + 'x');
-
-            // For labels in definitions (no prefix), use the full range
-            if (!location.prefix) {
-                edits.push(vscode.TextEdit.replace(location.range, newName));
-            } else {
-                edits.push(vscode.TextEdit.replace(nameOnlyRange, newName));
-            }
+            const nameOnlyRange = getNameOnlyRange(location.range, location.fullName);
+            edits.push(vscode.TextEdit.replace(nameOnlyRange, newName));
         }
 
         // Remove duplicate edits (same range)

@@ -92,6 +92,18 @@ class MockDocumentHighlight {
     }
 }
 
+// DocumentSymbol class
+class MockDocumentSymbol {
+    constructor(name, detail, kind, range, selectionRange) {
+        this.name = name;
+        this.detail = detail;
+        this.kind = kind;
+        this.range = range;
+        this.selectionRange = selectionRange;
+        this.children = [];
+    }
+}
+
 // TextEdit class
 class MockTextEdit {
     constructor(range, newText) {
@@ -125,6 +137,7 @@ const vscodeMock = {
     Position: MockPosition,
     Location: MockLocation,
     DocumentHighlight: MockDocumentHighlight,
+    DocumentSymbol: MockDocumentSymbol,
     TextEdit: MockTextEdit,
     WorkspaceEdit: MockWorkspaceEdit,
 
