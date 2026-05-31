@@ -2,8 +2,8 @@
   "name": "vscode-llvm-ir-language-support",
   "displayName": "VSCode LLVM IR Language Support",
   "description": "Syntax highlighting and language support for LLVM Intermediate Representation (IR) files",
-  "version": "1.0.2",
-  "publisher": "Shilei Tian",
+  "version": "1.1.0",
+  "publisher": "shiltian",
   "engines": {
     "vscode": "^1.80.0"
   },
