@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
 import {
-    parseDocument,
-    getSymbolAtPosition,
-    getSymbolKey,
+    getReferencesForSymbol,
+    getSymbolAndParsedDocument,
+    resolveSymbol,
     SymbolKind,
-    SymbolDefinition,
 } from '../llvmIrParser';
 
 /**
@@ -66,22 +65,17 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
     prepareRename(
         document: vscode.TextDocument,
         position: vscode.Position,
-        _token: vscode.CancellationToken
+        token: vscode.CancellationToken
     ): vscode.ProviderResult<vscode.Range | { range: vscode.Range; placeholder: string }> {
-        const symbol = getSymbolAtPosition(document, position);
-        if (!symbol) {
+        const result = getSymbolAndParsedDocument(document, position, token);
+        if (!result) {
             throw new Error('Cannot rename this element');
         }
 
-        const parsed = parseDocument(document);
+        const { symbol, parsed } = result;
 
         // Resolve the symbol to get the actual definition
-        const { definition, actualKind } = this.resolveSymbol(
-            parsed.definitions,
-            symbol.kind,
-            symbol.name,
-            symbol.functionName
-        );
+        const { definition, actualKind } = resolveSymbol(parsed, symbol);
 
         // Check if we can rename this symbol
         if (!definition && actualKind !== SymbolKind.Label) {
@@ -107,24 +101,20 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
         document: vscode.TextDocument,
         position: vscode.Position,
         newName: string,
-        _token: vscode.CancellationToken
+        token: vscode.CancellationToken
     ): vscode.ProviderResult<vscode.WorkspaceEdit> {
-        const symbol = getSymbolAtPosition(document, position);
-        if (!symbol) {
+        const result = getSymbolAndParsedDocument(document, position, token);
+        if (!result) {
             return null;
         }
 
-        const parsed = parseDocument(document);
+        const { symbol, parsed } = result;
         const workspaceEdit = new vscode.WorkspaceEdit();
         const edits: vscode.TextEdit[] = [];
 
         // Resolve the symbol to find the actual definition and kind
-        const { definition, actualName, actualKind } = this.resolveSymbol(
-            parsed.definitions,
-            symbol.kind,
-            symbol.name,
-            symbol.functionName
-        );
+        const resolved = resolveSymbol(parsed, symbol);
+        const { definition, actualKind } = resolved;
 
         // Collect all locations that need to be renamed
         const locationsToRename: { range: vscode.Range; prefix: string }[] = [];
@@ -138,43 +128,17 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
             });
         }
 
-        // Find all references
-        for (const ref of parsed.references) {
-            // For function-scoped symbols, only match references in the same function
-            if (actualKind === SymbolKind.LocalValue || actualKind === SymbolKind.Label) {
-                if (ref.functionName !== symbol.functionName) {
-                    continue;
-                }
+        for (const ref of getReferencesForSymbol(parsed, symbol, resolved)) {
+            if (token.isCancellationRequested) {
+                return null;
             }
-
-            // Match by the reference name
-            if (ref.name === symbol.name && ref.kind === symbol.kind) {
-                // Skip if this is the same location as the definition
-                if (definition && ref.range.isEqual(definition.selectionRange)) {
-                    continue;
-                }
-                locationsToRename.push({
-                    range: ref.range,
-                    prefix: getSymbolPrefix(ref.kind, ref.name),
-                });
+            if (definition && ref.range.isEqual(definition.selectionRange)) {
+                continue;
             }
-
-            // Handle label references stored with % prefix
-            if (actualKind === SymbolKind.Label && ref.kind === SymbolKind.LocalValue) {
-                if (ref.functionName !== symbol.functionName) {
-                    continue;
-                }
-                const refWithoutPercent = ref.name.startsWith('%') ? ref.name.substring(1) : ref.name;
-                if (refWithoutPercent === actualName) {
-                    if (definition && ref.range.isEqual(definition.selectionRange)) {
-                        continue;
-                    }
-                    locationsToRename.push({
-                        range: ref.range,
-                        prefix: '%',  // Label references use % prefix
-                    });
-                }
-            }
+            locationsToRename.push({
+                range: ref.range,
+                prefix: getSymbolPrefix(ref.kind, ref.name),
+            });
         }
 
         // Create text edits for all locations
@@ -195,59 +159,6 @@ export class LLVMIRRenameProvider implements vscode.RenameProvider {
 
         workspaceEdit.set(document.uri, uniqueEdits);
         return workspaceEdit;
-    }
-
-    /**
-     * Resolve a symbol to find its definition and actual kind
-     */
-    private resolveSymbol(
-        definitions: Map<string, SymbolDefinition>,
-        kind: SymbolKind,
-        name: string,
-        functionName?: string
-    ): { definition?: SymbolDefinition; actualName: string; actualKind: SymbolKind } {
-        // For local values and labels, look up with function scope
-        if ((kind === SymbolKind.LocalValue || kind === SymbolKind.Label) && functionName) {
-            const scopedKey = getSymbolKey(kind, name, functionName);
-            const definition = definitions.get(scopedKey);
-            if (definition) {
-                return { definition, actualName: name, actualKind: kind };
-            }
-        }
-
-        // Try exact match first
-        let definition = definitions.get(getSymbolKey(kind, name));
-        if (definition) {
-            return { definition, actualName: name, actualKind: kind };
-        }
-
-        // If it's a LocalValue starting with %, try alternatives
-        if (kind === SymbolKind.LocalValue && name.startsWith('%')) {
-            // Try NamedType
-            definition = definitions.get(getSymbolKey(SymbolKind.NamedType, name));
-            if (definition) {
-                return { definition, actualName: name, actualKind: SymbolKind.NamedType };
-            }
-
-            // Try Label (labels are defined without % prefix)
-            if (functionName) {
-                const labelName = name.substring(1);
-                definition = definitions.get(getSymbolKey(SymbolKind.Label, labelName, functionName));
-                if (definition) {
-                    return { definition, actualName: labelName, actualKind: SymbolKind.Label };
-                }
-            }
-        }
-
-        // If it's a GlobalValue, try Function
-        if (kind === SymbolKind.GlobalValue) {
-            definition = definitions.get(getSymbolKey(SymbolKind.Function, name));
-            if (definition) {
-                return { definition, actualName: name, actualKind: SymbolKind.Function };
-            }
-        }
-
-        return { definition: undefined, actualName: name, actualKind: kind };
     }
 
     /**

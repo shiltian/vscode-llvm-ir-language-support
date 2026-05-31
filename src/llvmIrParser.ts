@@ -41,6 +41,16 @@ export interface SymbolReference {
 }
 
 /**
+ * Symbol information at a cursor position.
+ */
+export interface SymbolAtPosition {
+    name: string;
+    kind: SymbolKind;
+    range: vscode.Range;
+    functionName?: string;
+}
+
+/**
  * Information about a function's scope
  */
 interface FunctionScope {
@@ -55,7 +65,18 @@ interface FunctionScope {
 export interface ParsedDocument {
     definitions: Map<string, SymbolDefinition>;
     references: SymbolReference[];
+    referencesByKey: Map<string, SymbolReference[]>;
     functionScopes: FunctionScope[];
+    functionNameByLine: (string | undefined)[];
+}
+
+/**
+ * Result of resolving a cursor symbol to its canonical definition kind.
+ */
+export interface ResolvedSymbol {
+    definition?: SymbolDefinition;
+    actualName: string;
+    actualKind: SymbolKind;
 }
 
 /**
@@ -73,10 +94,69 @@ export function getSymbolKey(kind: SymbolKind, name: string, functionName?: stri
     return `${kind}:${name}`;
 }
 
+function createEmptyParsedDocument(): ParsedDocument {
+    return {
+        definitions: new Map<string, SymbolDefinition>(),
+        references: [],
+        referencesByKey: new Map<string, SymbolReference[]>(),
+        functionScopes: [],
+        functionNameByLine: [],
+    };
+}
+
+function addReference(
+    references: SymbolReference[],
+    referencesByKey: Map<string, SymbolReference[]>,
+    reference: SymbolReference
+): void {
+    references.push(reference);
+
+    const unscopedKey = getSymbolKey(reference.kind, reference.name);
+    addReferenceToIndex(referencesByKey, unscopedKey, reference);
+
+    if (reference.functionName &&
+        (reference.kind === SymbolKind.LocalValue || reference.kind === SymbolKind.Label)) {
+        const scopedKey = getSymbolKey(reference.kind, reference.name, reference.functionName);
+        addReferenceToIndex(referencesByKey, scopedKey, reference);
+    }
+}
+
+function addReferenceToIndex(
+    referencesByKey: Map<string, SymbolReference[]>,
+    key: string,
+    reference: SymbolReference
+): void {
+    const refs = referencesByKey.get(key);
+    if (refs) {
+        refs.push(reference);
+    } else {
+        referencesByKey.set(key, [reference]);
+    }
+}
+
+function buildFunctionNameByLine(
+    lineCount: number,
+    functionScopes: FunctionScope[]
+): (string | undefined)[] {
+    const functionNameByLine: (string | undefined)[] = new Array(lineCount);
+
+    for (const scope of functionScopes) {
+        const endLine = Math.min(scope.endLine, lineCount - 1);
+        for (let lineNum = scope.startLine; lineNum <= endLine; lineNum++) {
+            functionNameByLine[lineNum] = scope.name;
+        }
+    }
+
+    return functionNameByLine;
+}
+
 /**
  * Parse a document and extract all definitions and references
  */
-export function parseDocument(document: vscode.TextDocument): ParsedDocument {
+export function parseDocument(
+    document: vscode.TextDocument,
+    token?: vscode.CancellationToken
+): ParsedDocument {
     const cached = documentCache.get(document.uri.toString());
     if (cached && cached.version === document.version) {
         return cached.parsed;
@@ -84,6 +164,7 @@ export function parseDocument(document: vscode.TextDocument): ParsedDocument {
 
     const definitions = new Map<string, SymbolDefinition>();
     const references: SymbolReference[] = [];
+    const referencesByKey = new Map<string, SymbolReference[]>();
     const functionScopes: FunctionScope[] = [];
     const text = document.getText();
     const lines = text.split('\n');
@@ -94,6 +175,10 @@ export function parseDocument(document: vscode.TextDocument): ParsedDocument {
     let braceDepth = 0;
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+        if (token?.isCancellationRequested) {
+            return createEmptyParsedDocument();
+        }
+
         const line = lines[lineNum];
         const trimmedLine = line.trim();
 
@@ -130,21 +215,19 @@ export function parseDocument(document: vscode.TextDocument): ParsedDocument {
         }
     }
 
+    const functionNameByLine = buildFunctionNameByLine(lines.length, functionScopes);
+
     // Second pass: parse definitions and references with function scope awareness
     currentFunction = null;
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+        if (token?.isCancellationRequested) {
+            return createEmptyParsedDocument();
+        }
+
         const line = lines[lineNum];
         const trimmedLine = line.trim();
-
-        // Determine current function scope
-        currentFunction = null;
-        for (const scope of functionScopes) {
-            if (lineNum >= scope.startLine && lineNum <= scope.endLine) {
-                currentFunction = scope.name;
-                break;
-            }
-        }
+        currentFunction = functionNameByLine[lineNum] || null;
 
         // Skip empty lines and comments
         if (trimmedLine === '' || trimmedLine.startsWith(';')) {
@@ -155,10 +238,10 @@ export function parseDocument(document: vscode.TextDocument): ParsedDocument {
         parseDefinitions(line, lineNum, definitions, currentFunction, functionScopes);
 
         // Parse references
-        parseReferences(line, lineNum, references, currentFunction);
+        parseReferences(line, lineNum, references, referencesByKey, currentFunction);
     }
 
-    const parsed = { definitions, references, functionScopes };
+    const parsed = { definitions, references, referencesByKey, functionScopes, functionNameByLine };
     documentCache.set(document.uri.toString(), { version: document.version, parsed });
     return parsed;
 }
@@ -385,6 +468,7 @@ function parseReferences(
     line: string,
     lineNum: number,
     references: SymbolReference[],
+    referencesByKey: Map<string, SymbolReference[]>,
     currentFunction: string | null
 ): void {
     // Skip comment-only lines
@@ -396,7 +480,7 @@ function parseReferences(
     let match;
     while ((match = globalRegex.exec(codePart)) !== null) {
         const fullName = '@' + match[1];
-        references.push({
+        addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.GlobalValue,
             range: new vscode.Range(lineNum, match.index, lineNum, match.index + fullName.length),
@@ -407,7 +491,7 @@ function parseReferences(
     const localRegex = /%([-a-zA-Z$._][-a-zA-Z$._0-9]*|"[^"]+"|[0-9]+)/g;
     while ((match = localRegex.exec(codePart)) !== null) {
         const fullName = '%' + match[1];
-        references.push({
+        addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.LocalValue,
             range: new vscode.Range(lineNum, match.index, lineNum, match.index + fullName.length),
@@ -421,7 +505,7 @@ function parseReferences(
         const labelName = match[1];
         const fullMatch = match[0];
         const nameStart = match.index + fullMatch.lastIndexOf('%') + 1;
-        references.push({
+        addReference(references, referencesByKey, {
             name: labelName,
             kind: SymbolKind.Label,
             range: new vscode.Range(lineNum, nameStart, lineNum, nameStart + labelName.length),
@@ -437,7 +521,7 @@ function parseReferences(
         if (afterMatch.startsWith('=')) {
             continue;
         }
-        references.push({
+        addReference(references, referencesByKey, {
             name: match[1],
             kind: SymbolKind.Metadata,
             range: new vscode.Range(lineNum, match.index, lineNum, match.index + match[1].length),
@@ -448,7 +532,7 @@ function parseReferences(
     const attrRegex = /#([0-9]+)/g;
     while ((match = attrRegex.exec(codePart)) !== null) {
         const fullName = '#' + match[1];
-        references.push({
+        addReference(references, referencesByKey, {
             name: fullName,
             kind: SymbolKind.AttributeGroup,
             range: new vscode.Range(lineNum, match.index, lineNum, match.index + fullName.length),
@@ -460,7 +544,7 @@ function parseReferences(
     while ((match = comdatRefRegex.exec(codePart)) !== null) {
         const name = match[1];
         const nameStart = match.index + match[0].indexOf(name);
-        references.push({
+        addReference(references, referencesByKey, {
             name,
             kind: SymbolKind.Comdat,
             range: new vscode.Range(lineNum, nameStart, lineNum, nameStart + name.length),
@@ -475,6 +559,11 @@ export function getFunctionAtPosition(
     parsed: ParsedDocument,
     position: vscode.Position
 ): string | undefined {
+    const functionName = parsed.functionNameByLine[position.line];
+    if (functionName) {
+        return functionName;
+    }
+
     for (const scope of parsed.functionScopes) {
         if (position.line >= scope.startLine && position.line <= scope.endLine) {
             return scope.name;
@@ -489,9 +578,55 @@ export function getFunctionAtPosition(
 export function getSymbolAtPosition(
     document: vscode.TextDocument,
     position: vscode.Position
-): { name: string; kind: SymbolKind; range: vscode.Range; functionName?: string } | null {
+): SymbolAtPosition | null {
+    const symbol = getRawSymbolAtPosition(document, position);
+    if (!symbol) {
+        return null;
+    }
+
+    if (symbol.kind !== SymbolKind.LocalValue && symbol.kind !== SymbolKind.Label) {
+        return symbol;
+    }
+
     const parsed = parseDocument(document);
-    const currentFunction = getFunctionAtPosition(parsed, position);
+    return {
+        ...symbol,
+        functionName: getFunctionAtPosition(parsed, position),
+    };
+}
+
+/**
+ * Get both the symbol and parsed document using a single parse on provider hot paths.
+ */
+export function getSymbolAndParsedDocument(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    token?: vscode.CancellationToken
+): { symbol: SymbolAtPosition; parsed: ParsedDocument } | null {
+    const rawSymbol = getRawSymbolAtPosition(document, position);
+    if (!rawSymbol || token?.isCancellationRequested) {
+        return null;
+    }
+
+    const parsed = parseDocument(document, token);
+    if (token?.isCancellationRequested) {
+        return null;
+    }
+
+    const symbol = (rawSymbol.kind === SymbolKind.LocalValue || rawSymbol.kind === SymbolKind.Label)
+        ? { ...rawSymbol, functionName: getFunctionAtPosition(parsed, position) }
+        : rawSymbol;
+
+    return { symbol, parsed };
+}
+
+/**
+ * Get the symbol token at a position without parsing the document.
+ */
+export function getRawSymbolAtPosition(
+    document: vscode.TextDocument,
+    position: vscode.Position
+): SymbolAtPosition | null {
     const line = document.lineAt(position.line).text;
     const col = position.character;
 
@@ -513,7 +648,6 @@ export function getSymbolAtPosition(
             name,
             kind: SymbolKind.LocalValue,
             range: new vscode.Range(position.line, localMatch.start, position.line, localMatch.end),
-            functionName: currentFunction,
         };
     }
 
@@ -524,7 +658,6 @@ export function getSymbolAtPosition(
             name: labelDefMatch[1],
             kind: SymbolKind.Label,
             range: new vscode.Range(position.line, 0, position.line, labelDefMatch[1].length),
-            functionName: currentFunction,
         };
     }
 
@@ -559,6 +692,93 @@ export function getSymbolAtPosition(
     }
 
     return null;
+}
+
+/**
+ * Resolve a cursor symbol to the definition kind used by providers.
+ */
+export function resolveSymbol(
+    parsed: ParsedDocument,
+    symbol: SymbolAtPosition
+): ResolvedSymbol {
+    const { definitions } = parsed;
+    const { kind, name, functionName } = symbol;
+
+    // For local values and labels, look up with function scope
+    if ((kind === SymbolKind.LocalValue || kind === SymbolKind.Label) && functionName) {
+        const scopedKey = getSymbolKey(kind, name, functionName);
+        const definition = definitions.get(scopedKey);
+        if (definition) {
+            return { definition, actualName: name, actualKind: kind };
+        }
+    }
+
+    // Try exact match first
+    let definition = definitions.get(getSymbolKey(kind, name));
+    if (definition) {
+        return { definition, actualName: name, actualKind: kind };
+    }
+
+    // If it's a LocalValue starting with %, try alternatives
+    if (kind === SymbolKind.LocalValue && name.startsWith('%')) {
+        // Try NamedType
+        definition = definitions.get(getSymbolKey(SymbolKind.NamedType, name));
+        if (definition) {
+            return { definition, actualName: name, actualKind: SymbolKind.NamedType };
+        }
+
+        // Try Label (labels are defined without % prefix)
+        if (functionName) {
+            const labelName = name.substring(1);
+            definition = definitions.get(getSymbolKey(SymbolKind.Label, labelName, functionName));
+            if (definition) {
+                return { definition, actualName: labelName, actualKind: SymbolKind.Label };
+            }
+        }
+    }
+
+    // If it's a GlobalValue, try Function
+    if (kind === SymbolKind.GlobalValue) {
+        definition = definitions.get(getSymbolKey(SymbolKind.Function, name));
+        if (definition) {
+            return { definition, actualName: name, actualKind: SymbolKind.Function };
+        }
+    }
+
+    return { definition: undefined, actualName: name, actualKind: kind };
+}
+
+/**
+ * Get references for a resolved symbol using the keyed reference index.
+ */
+export function getReferencesForSymbol(
+    parsed: ParsedDocument,
+    symbol: SymbolAtPosition,
+    resolved: ResolvedSymbol = resolveSymbol(parsed, symbol)
+): SymbolReference[] {
+    const references: SymbolReference[] = [];
+
+    const addIndexedReferences = (key: string): void => {
+        const indexedReferences = parsed.referencesByKey.get(key);
+        if (indexedReferences) {
+            references.push(...indexedReferences);
+        }
+    };
+
+    if (resolved.actualKind === SymbolKind.LocalValue && symbol.functionName) {
+        addIndexedReferences(getSymbolKey(symbol.kind, symbol.name, symbol.functionName));
+    } else if (resolved.actualKind === SymbolKind.Label && symbol.functionName) {
+        if (symbol.kind === SymbolKind.Label) {
+            addIndexedReferences(getSymbolKey(SymbolKind.Label, resolved.actualName, symbol.functionName));
+            addIndexedReferences(getSymbolKey(SymbolKind.LocalValue, `%${resolved.actualName}`, symbol.functionName));
+        } else {
+            addIndexedReferences(getSymbolKey(symbol.kind, symbol.name, symbol.functionName));
+        }
+    } else {
+        addIndexedReferences(getSymbolKey(symbol.kind, symbol.name));
+    }
+
+    return references;
 }
 
 /**

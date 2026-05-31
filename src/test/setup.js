@@ -60,6 +60,10 @@ class MockRange {
         return this.start.line === this.end.line;
     }
 
+    isEqual(other) {
+        return this.start.isEqual(other.start) && this.end.isEqual(other.end);
+    }
+
     contains(positionOrRange) {
         if (positionOrRange.line !== undefined && positionOrRange.character !== undefined && !positionOrRange.start) {
             const pos = positionOrRange;
@@ -88,12 +92,41 @@ class MockDocumentHighlight {
     }
 }
 
+// TextEdit class
+class MockTextEdit {
+    constructor(range, newText) {
+        this.range = range;
+        this.newText = newText;
+    }
+
+    static replace(range, newText) {
+        return new MockTextEdit(range, newText);
+    }
+}
+
+// WorkspaceEdit class
+class MockWorkspaceEdit {
+    constructor() {
+        this.edits = new Map();
+    }
+
+    set(uri, edits) {
+        this.edits.set(uri.toString(), edits);
+    }
+
+    get(uri) {
+        return this.edits.get(uri.toString()) || [];
+    }
+}
+
 // Mock vscode module
 const vscodeMock = {
     Range: MockRange,
     Position: MockPosition,
     Location: MockLocation,
     DocumentHighlight: MockDocumentHighlight,
+    TextEdit: MockTextEdit,
+    WorkspaceEdit: MockWorkspaceEdit,
 
     Uri: {
         file: (fsPath) => ({
